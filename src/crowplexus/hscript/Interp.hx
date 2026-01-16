@@ -75,8 +75,12 @@ class Interp {
 		return null;
 	}
 
-	public static var typesAlias: #if haxe3 Map<String,
-		Dynamic> = new Map() #else Hash<Dynamic> = new Hash() #end;
+	public inline static function removeStaticVariable(name: String) {
+		if (staticVariables.exists(name))
+			staticVariables.remove(name);
+	}
+
+	public static var typesAlias: #if haxe3 Map<String, Dynamic> = new Map() #else Hash<Dynamic> = new Hash() #end;
 
 	private static var scriptClasses: #if haxe3 Map<String,
 		crowplexus.hscript.scriptclass.ScriptClass> = new Map() #else Hash<crowplexus.hscript.scriptclass.ScriptClass> = new Hash() #end;
@@ -103,6 +107,11 @@ class Interp {
 		return null;
 	}
 
+	public static function removeScriptClass(path: String) {
+		if (scriptClasses.exists(path))
+			scriptClasses.remove(path);
+	}
+
 	/**
 	 * 指定script enum是否存在
 	 * @param path		指定script enum路径
@@ -123,6 +132,11 @@ class Interp {
 		return null;
 	}
 
+	public static inline function removeScriptEnum(path: String): Bool {
+		if (scriptEnums.exists(path))
+			scriptEnums.remove(path);
+	}
+
 	/**
 	 * 清除已捕获的静态变量、script class、script enum
 	 */
@@ -133,6 +147,8 @@ class Interp {
 		typesAlias = #if haxe3 new Map() #else new Hash() #end;
 		unpackClassCache = #if haxe3 new Map() #else new Hash() #end;
 	}
+
+	public var forcedOverrideScriptClass: Bool = false;
 
 	/**
 	 * 用于限制script class的创建
@@ -629,7 +645,7 @@ class Interp {
 			}
 		}
 
-		if(imports.exists(id + "_Typedef")) {
+		if (imports.exists(id + "_Typedef")) {
 			var v = imports.get(id + "_Typedef");
 			return v;
 		}
@@ -704,7 +720,7 @@ class Interp {
 					return variables.get(id);
 				return convertDouble(resolve(id));
 			case EVar(n, de, _, v, getter, setter, isConst, ass):
-				final me:Interp = this;
+				final me: Interp = this;
 
 				if (getter == null)
 					getter = "default";
@@ -719,7 +735,7 @@ class Interp {
 						default:
 							error(ECustom("Inline variable initialization must be a constant value"));
 					}
-			}
+				}
 				if (ass != null && ass.contains("static")) {
 					if (staticVariables.get(n) == null) {
 						if (isConst)
@@ -875,8 +891,12 @@ class Interp {
 							}
 							re = Reflect.makeVarArgs(function(params: Array<Dynamic>) {
 								if (params.length < minParams) {
-									var str = "Invalid number of parameters. Got " + params.length + ", required " + minParams + " for function 'bind'";
-									error(ECustom(str));
+									/*
+										var str = "Invalid number of parameters. Got " + params.length + ", required " + minParams + " for function 'bind'";
+										error(ECustom(str)); */
+									for (i in params.length...minParams) {
+										params.push(null);
+									}
 								}
 								var forceArgs: Array<Dynamic> = [];
 								for (i => arg in args) {
@@ -889,9 +909,11 @@ class Interp {
 								return Reflect.callMethod(null, obj, forceArgs);
 							});
 						} else if (f == "match" && (Reflect.isEnumValue(obj) || obj is crowplexus.hscript.scriptenum.ScriptEnumValue)) {
-							if (params.length != 1)
-								error(ECustom("Invalid number of parameters. Got " + params.length + ", required " + 1 + " for function 'match'"));
-
+							if (params.length != 1) {
+								// error(ECustom("Invalid number of parameters. Got " + params.length + ", required " + 1 + " for function 'match'"));
+								if (params.length <= 0)
+									params.push(null);
+							}
 							final scripting = (obj is crowplexus.hscript.scriptenum.ScriptEnumValue);
 							re = doEnumMatch(obj, params[0], scripting);
 						} else {
@@ -946,12 +968,12 @@ class Interp {
 					return null;
 
 				#if STAR_CLASSES
-				if(star == true) {
-					for(pa=>cl in Interp.scriptClasses) {
+				if (star == true) {
+					for (pa => cl in Interp.scriptClasses) {
 						final last = pa.lastIndexOf(".");
 						final p = pa.substr(0, last > -1 ? last : 0);
 						final cn = pa.substr(last > -1 ? last + 1 : 0);
-						if(p == v) {
+						if (p == v) {
 							if (Iris.blocklistImports.contains(cn)) {
 								error(ECustom("You cannot add a blacklisted import, for class " + cn));
 								return null;
@@ -961,19 +983,19 @@ class Interp {
 								imports.set(cn, cl);
 						}
 					}
-					if(Iris.starPackageClasses.exists(v)) for(v in Iris.starPackageClasses[v]) {
-						if (Iris.blocklistImports.contains(v.name)) {
-							error(ECustom("You cannot add a blacklisted import, for class " + v.name));
-							return null;
-						}
+					if (Iris.starPackageClasses.exists(v))
+						for (v in Iris.starPackageClasses[v]) {
+							if (Iris.blocklistImports.contains(v.name)) {
+								error(ECustom("You cannot add a blacklisted import, for class " + v.name));
+								return null;
+							}
 
-						if (!imports.exists(v.name))
-							imports.set(v.name, v.value);
-					}
+							if (!imports.exists(v.name))
+								imports.set(v.name, v.value);
+						}
 				} else
 				#end
 				{
-
 					final aliasStr = (as != null ? " named " + as : ""); // for errors
 					if (Iris.blocklistImports.contains(v)) {
 						error(ECustom("You cannot add a blacklisted import, for class " + v + aliasStr));
@@ -1035,10 +1057,15 @@ class Interp {
 				var f = function(args: Array<Dynamic>) {
 					if (((args == null) ? 0 : args.length) != params.length) {
 						if (args.length < minParams) {
-							var str = "Invalid number of parameters. Got " + args.length + ", required " + minParams;
-							if (name != null)
-								str += " for function '" + name + "'";
-							error(ECustom(str));
+							/*
+								var str = "Invalid number of parameters. Got " + args.length + ", required " + minParams;
+								if (name != null)
+									str += " for function '" + name + "'";
+								error(ECustom(str)); */
+
+							for (i in params.length...minParams) {
+								params.push(null);
+							}
 						}
 						// make sure mandatory args are forced
 						var args2 = [];
@@ -1239,7 +1266,7 @@ class Interp {
 				if (!scriptEnums.exists(fullPath))
 					registerScriptEnum(enumName, fields, pkg);
 			case ETypedef(name, t, pkg):
-				switch(t) {
+				switch (t) {
 					case CTPath(p):
 						registerTypeAlias(name, p, pkg);
 
@@ -1433,7 +1460,7 @@ class Interp {
 	}
 
 	function convertDouble(re: Dynamic): Dynamic {
-		if(Lambda.find(metas, f -> f.name == ":unpass_standard") != null)
+		if (Lambda.find(metas, f -> f.name == ":unpass_standard") != null)
 			return re;
 
 		if (fieldDotRet.length == 0) {
@@ -1451,20 +1478,20 @@ class Interp {
 		return re;
 	}
 
-	function registerTypeAlias(name:String, p:TypePath, ?pkg:Array<String>) {
+	function registerTypeAlias(name: String, p: TypePath, ?pkg: Array<String>) {
 		final cn = (p.pack != null && p.pack.length > 0 ? p.pack.join(".") + "." : "") + p.name;
-		var v:Dynamic = imports.get(cn) ?? ProxyType.resolveClass(cn) ?? ProxyType.resolveEnum(cn);
+		var v: Dynamic = imports.get(cn) ?? ProxyType.resolveClass(cn) ?? ProxyType.resolveEnum(cn);
 		typesAlias.set((pkg != null && pkg.length > 0 ? pkg.join(".") + "." : "") + name, v);
 		imports.set(name + "_Typedef", v);
 	}
 
-	function registerScriptClass(cl:String, ex:Null<TypePath>, fields:Array<BydFieldDecl>, metas:Metadata, ?pkg:Array<String>) {
+	function registerScriptClass(cl: String, ex: Null<TypePath>, fields: Array<BydFieldDecl>, metas: Metadata, ?pkg: Array<String>) {
 		var cls = new crowplexus.hscript.scriptclass.ScriptClass(this, cl, ex, fields, metas, pkg);
 		scriptClasses.set(cls.fullPath, cls);
 		imports.set(cl, cls);
 	}
 
-	function registerScriptEnum(enumName:String, fields:Array<EnumType>, ?pkg:Array<String>) {
+	function registerScriptEnum(enumName: String, fields: Array<EnumType>, ?pkg: Array<String>) {
 		var obj: crowplexus.hscript.scriptenum.ScriptEnum = new crowplexus.hscript.scriptenum.ScriptEnum(enumName, pkg);
 		for (index => field in fields) {
 			switch (field) {
@@ -1480,10 +1507,14 @@ class Interp {
 					var f = function(args: Array<Dynamic>) {
 						if (((args == null) ? 0 : args.length) != params.length) {
 							if (args.length < minParams) {
-								var str = "Invalid number of parameters. Got " + args.length + ", required " + minParams;
-								if (enumName != null)
-									str += " for enum '" + enumName + "'";
-								error(ECustom(str));
+								/*
+									var str = "Invalid number of parameters. Got " + args.length + ", required " + minParams;
+									if (enumName != null)
+										str += " for enum '" + enumName + "'";
+									error(ECustom(str)); */
+								for (i in params.length...minParams) {
+									params.push(null);
+								}
 							}
 							// make sure mandatory args are forced
 							var args2 = [];
