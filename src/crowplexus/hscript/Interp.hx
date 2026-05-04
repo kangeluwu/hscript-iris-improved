@@ -132,7 +132,7 @@ class Interp {
 		return null;
 	}
 
-	public static inline function removeScriptEnum(path: String): Bool {
+	public static inline function removeScriptEnum(path: String) {
 		if (scriptEnums.exists(path))
 			scriptEnums.remove(path);
 	}
